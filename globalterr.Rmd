@@ -1,0 +1,515 @@
+---
+title: "First Midterm"
+author: "Shreya shakya"
+date: "10/14/2019"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+### Load packages
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(naniar)
+library(acs)
+library(lubridate)
+library(stringr)
+```
+
+### Load Data
+
+Some dataset consist of missing values like (-9,-99 or blank), so these are recoded into NA. Here, population data consist of 81585 observation and 10 variables, county data consist of 42741 observations and 5 variables, poverty data consist of 3193 observation and 5 variables and  Global Terrorism Database (GTD) data consist of 146 observation with 38 variables.
+
+```{r}
+pop_data <- read_csv('data/population.csv',
+               na = c(-99, -9, ""))
+poverty_data <- read_csv('data/poverty.csv',
+                          na = c(-99, -9, ""))
+gtd_data <- read_csv('data/GTD.csv',
+                      na = c(-99, -9, ""))
+county_data <- read_csv('data/county_city.csv',
+                         na = c(-99, -9, ""))
+```
+
+**Overall Data Preprocessing**
+For the merging and analysis purpose, firstly all the dataset are cleaned as follows. Basically, in all dataset 
+inorder to prevent from case sensitive issues, variables such as cities, county and state_name are changed into lower case and spaces between them are also removed.
+
+**Data Preprocessing for GTD dataset**
+In GTD dataset, provstate variable is abbreviated and renamed as state_name. In the state.abb function, District of Columbia could not be abbreviated as DC so I manaully replaced the NA value with DC. 
+
+```{r}
+#summary(gtd_data)
+clean_gtd <- gtd_data  %>% 
+  distinct() %>%
+  #Abbreviate the state name
+  mutate(provstate =  state.abb[match(provstate, state.name)])%>%
+  rename(state_name = provstate) %>%
+  #Replaced NA with DC
+  replace_na(list(state_name = list("DC"))) %>%
+  #Converting all cities and state_name to lowercase
+  mutate(state_name= tolower(state_name), city = tolower(city)) %>%
+  #Remove space between all the cities
+  mutate(city = str_replace_all(city, " ", "")) %>%
+  as.data.frame()
+```
+
+**Data Preprocessing for poverty dataset**
+In poverty dataset, I have filtered out city which are present in Area name (since there were only few cities). The word "county" is removed for the observation in Area_Name. Since, Area name only has county observations, I renamed Area_Name variable as County and state variable as state_name.
+
+```{r}
+#summary(poverty_data)
+
+clean_poverty <- poverty_data %>%
+  distinct() %>%
+  #Not selecting area_name with cities, just keep county
+  filter(!str_detect(Area_Name, 'city')) %>%
+  rename(state_name = State, county=Area_Name) %>%
+  mutate(county= str_remove_all(county, " County")) %>%
+  #Converting all county and state_name to lowercase
+  mutate(state_name= tolower(state_name), county = tolower(county)) %>%
+  mutate(county = str_replace_all(county, " ", "")) %>%
+  as.data.frame()
+```
+
+**Data Preprocessing for county and city dataset**
+In county and city dataset, I have replaced state varaible as state_name and basic changes as the other dataset.
+
+```{r}
+#summary(county_data)
+clean_county <- county_data %>%
+  distinct() %>%
+  rename(state_name = state) %>%
+  #Converting all cities, county and state_name to lowercase
+  mutate(state_name= tolower(state_name), city =tolower(city), county = tolower(county)) %>%
+  #Removing spaces in city and county variable
+  mutate(city = str_replace_all(city, " ", "")) %>%
+  mutate(county = str_replace_all(county, " ", "")) %>%
+  as.data.frame()
+```
+
+**Data Preprocessing for population dataset**
+In population dataset, only the cities contained in NAME variable is exactred into city variable. Cities have a suffics of "(pt.)" and "city" as well, so I removed those strings from the observation. There are population estimates from 2013 to 2016 so I gathered those data as key and values. I considered the key variable as the "year" and in that year population estimate as value variable "popul".
+
+```{r}
+#summary(pop_data)
+
+clean_pop <- pop_data %>%
+  distinct() %>%
+  #Create a new variable city where NAME consist of word city otherwise leave as NA.
+  mutate(city = ifelse(grepl("city", NAME),NAME, NA) ) %>%
+  #Abbreviate the state name
+  mutate(STNAME =  state.abb[match(STNAME, state.name)]) %>%
+  #Replaced NA with DC
+  replace_na(list(STNAME = list("DC"))) %>%
+  #Remove ( or ) or . from city variable 
+  mutate(city= str_remove_all(city, "\\(|\\)|\\.")) %>%
+  #Remove pt or city from city variable
+  mutate(city= str_remove_all(city, " pt| city")) %>%
+  #Remove blank spaces from city variable
+  mutate(city = str_replace_all(city, " ", "")) %>%
+  #Rename STNAME as state_name
+  rename(state_name = STNAME) %>%
+  #Converting all cities and state_name to lowercase
+  mutate(state_name= tolower(state_name), city = tolower(city)) %>%
+  as.data.frame()
+
+#Combine four variables (POPESTIMATE 2013-2016) as key and population size as values
+clean_pop <- clean_pop %>%
+  gather(iyear,popul,POPESTIMATE2013:POPESTIMATE2016) %>%
+  mutate(iyear =str_extract(iyear, "\\-*\\d+\\.*\\d*")) %>%
+  mutate(iyear = as.numeric(iyear))
+```
+
+**Cleaning observation for names spelled differently**
+There will be some issues while merging as there are still some county, city and state spelled differenlty in different dataset. So, I checked which variables are not common in both the dataset using anti join. Those observations which has spelling errors are changed in all the dataset as follows:
+
+```{r}
+#anti_1 <- anti_join(clean_gtd, clean_county, by= c("city","state_name"))
+clean_gtd <- clean_gtd %>%
+    mutate(city= fct_collapse(city,
+                         losangeles= "lakelosangeles",
+                         newyork= "newyorkcity",
+                         saintlouis = "st.louis",
+                         saintcloud = "st.cloud",
+                         inglewood = "ingelwood",
+                         tyngsboro = "tyngsborough"
+                         ))
+
+#anti_1 <- anti_join(clean_gtd, clean_county, by= c("city","state_name"))
+
+#merge1 <- m_gtd %>% merge(clean_county, by = c("city","state_name"), na_matches = "never",  all.x=T)%>%
+#distinct(latitude.x,longitude.x,nkill,propcomment,propvalue,iyear,imonth,iday,.keep_all = T)
+
+#anti_2 <- anti_join(merge1, clean_poverty, by= c("county","state_name"))
+
+clean_poverty <- clean_poverty %>%
+      mutate(county= fct_collapse(county,
+                         saintlouiscity= "st.louis",
+                         saintlucie = "st.lucie"))
+  
+
+#anti_2 <- anti_join(merge1, clean_poverty, by= c("county","state_name"))
+
+#merge2 <- merge1 %>% merge(clean_poverty, by = c("county","state_name"), na_matches = "never",  all.x=T)%>%
+#distinct(latitude.x,longitude.x,nkill,propcomment,propvalue,iyear,imonth,iday,.keep_all = T)
+
+#anti_3 <- anti_join(merge2, clean_pop, by= c("city","state_name"))
+
+clean_pop <- clean_pop %>%
+      mutate(city= fct_collapse(city,
+                         watertown= "watertowntown",
+                         saintlouis ="stlouis",
+                         saintcloud ="stcloud"
+                         ))
+
+
+#anti_3 <- anti_join(merge2, clean_pop, by= c("city","state_name"))
+#merge3<- merge2 %>%merge(clean_pop, by = c("city","state_name"), na_matches = "never",  all.x=T)%>%
+#distinct(latitude.x,longitude.x,nkill,propcomment,propvalue,iyear,imonth,iday,.keep_all = T)
+```
+
+**Ater data is cleaned, all the dataset are combined together using common state_name and either by city or county accordingly.**
+```{r}
+final_dataset <- clean_gtd %>% 
+  merge(clean_county, by = c("city","state_name"), na_matches = "never",  all.x=T) %>%
+  merge(clean_poverty, by = c("county","state_name"), na_matches = "never", all.x=T) %>%
+  merge(clean_pop, by = c("city","state_name","iyear"),na_matches = "never",  all.x=T) %>%
+  distinct(latitude.x,longitude.x,nkill,propcomment,propvalue,iyear,imonth,iday,.keep_all = T)
+```
+
+Following code shows the univariate summaries of each variable in the final data set. Frequency tables for each category variables are constructed to any issues.
+
+```{r}
+final_dataset %>% group_by(propextent,propextent_txt) %>%
+  summarize(count = n())
+
+final_dataset %>%
+  group_by(suicide) %>%
+  summarize(count=n()) 
+
+final_dataset %>%
+  group_by(nperps) %>%
+  summarize(count=n())
+
+final_dataset %>%
+  group_by(propvalue)%>%
+  summarize(count= n())
+```
+
+In propextent_txt and propextent variable there are alot of NA i.e 54. There is no indication that any incident was a suicide attack all the sucide variable is 0. Also, variable nperps has 50 NA and similarlu, propvalue has126 NA values. So, these variables does not provide much information for our analysis purpose, we could drop them from our final dataset. Following are some univariate summary for numerical variables:
+```{r}
+#Checking for any odd values in numerical variables
+final_dataset %>%
+  summarize(m = mean(nkill),s=sd(nkill))
+
+#final_dataset %>%
+  #ggplot(aes(x=nkill)) +
+    #geom_histogram(binwidth =10, color = "black",fill = "white") +
+    #theme_minimal()
+
+final_dataset %>%
+  summarize(m = mean(nwound),s=sd(nwound))
+
+#final_dataset %>%
+  #ggplot(aes(x=nwound)) +
+    #geom_histogram(binwidth = 10, color = "black",fill = "white") +
+    #theme_minimal()
+
+final_dataset %>%
+  summarize(m = mean(PCTPOVALL_2015, na.rm=T),s=sd(PCTPOVALL_2015, na.rm=T))
+
+#final_dataset %>%
+  #ggplot(aes(x=PCTPOV017_2015)) +
+    #geom_histogram(binwidth = 1.5, color = "black",fill = "white") +
+    #theme_minimal()
+
+final_dataset %>%
+  summarize(m = mean(PCTPOV017_2015, na.rm=T),s=sd(PCTPOV017_2015, na.rm=T))
+
+#final_dataset %>%
+  #ggplot(aes(x=PCTPOV017_2015)) +
+    #geom_histogram(binwidth = 1.5, color = "black",fill = "white") +
+    #theme_minimal()
+
+final_dataset %>%
+  summarize(m = mean(MEDHHINC_2015, na.rm=T),s=sd(MEDHHINC_2015, na.rm=T))
+```
+
+Here, the Dates from the GTD should are put in "yyyy-mm-dd" format. And only the important dataset is selected for further analysis purpose.
+```{r}
+final_dataset <- final_dataset %>%
+  unite("dates", iyear,imonth,iday) %>%
+mutate(dates = ymd(dates))
+
+#Select important variables
+midterm_data_shyaa23 <- final_dataset %>%
+  dplyr::select(.,-c(propextent,propextent_txt,suicide,nperps,propvalue,NAME,latitude.y,longitude.y)) %>%
+  rename(state=state_name)
+
+# Write CSV file
+write.csv(midterm_data_shyaa23, file = "data/midterm_data_shyaa23.csv")
+```
+
+**1. Plot of the U.S. with each incident**  
+
+```{r}
+#Library required for ploting maps
+library(ggplot2)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(tools)
+library(scales)
+library(maptools)
+library(rgeos)
+library(plotly)
+
+#Load the state map data from mapdata library
+usa_state <- map_data("state")
+#Abbreviated the state name to match with midterm data and changed to lowercase
+usa_state  <- usa_state %>%
+  mutate(state = toTitleCase(region)) %>%
+  mutate(state  =  state.abb[match(state , state.name)]) %>%
+  mutate(state = tolower(state))
+
+#plot the outline of the US map by states using latitude and longitude
+gg1 <- ggplot(data=midterm_data_shyaa23,text = paste("State: $", state)) + 
+  geom_polygon(data = usa_state, aes(x=long, y = lat, group = group), colour = "black", fill = "gray85") + 
+  coord_fixed(1.3)+ theme_minimal()
+
+#Locate every incidents on the map from midterm data
+p <- gg1 + 
+  geom_point(data = midterm_data_shyaa23, aes(x = longitude.x, y = latitude.x), color = "black", size = 3.5) +
+  geom_point(data = midterm_data_shyaa23, aes(x = longitude.x, y = latitude.x,
+                                              text = paste("state:", state, "<br>city:",city)), color = "yellow", size = 2) +
+  labs(title="Incidents occured according to locations", x="Longitude",
+       y="Latitude")
+
+#To see the details of incident, ggplotly allows to hover in the incident areas
+ggplotly(p)
+
+```
+
+We can see that there are many number of incidents around California, Texas, Florida, Louisian, New Jersey state compared to other states.
+
+**Plot showing city’s population size**
+```{r}
+#plot the outline of the US map by states using latitude and longitude
+gg2 <- ggplot() + 
+  geom_polygon(data = usa_state, aes(x=long, y = lat, group = group), colour = "gray85", fill = "gray75") + 
+  coord_fixed(1.3)+ theme_minimal()
+
+#Plot the population according to its size in the us state map
+p<- gg2+
+  geom_point(data=midterm_data_shyaa23,aes(x = longitude.x, y = latitude.x, size = popul,text = paste("state:", state, "<br>city:",city, "<br>Year:",year(dates))),colour = 'purple', alpha = .3)+
+  labs(title="Population size in different cities", x="Longitude",
+       y="Latitude", size = 'Population') 
+
+# ggplotly allows to hover in to see details of city, state, population size and year
+ggplotly(p)
+```
+ From the map we can see that the points which are bigger are the cities having higher population size and viceversa. We can hover around the points to see the details of city, state, population size and year. The city Losangeles, Newyork and Houston are highly populated compared to other cities. 
+
+**1. Plot showing poverty variables**
+```{r}
+#usa_county<- map_data("county")
+#usa_county  <- usa_county  %>%
+  #mutate(county = tolower(subregion))
+
+#For visualization, join map data and midterm data
+for_map <- left_join(usa_state,midterm_data_shyaa23, by="state",all.x=T)
+
+#Choropleth map fo PCTPOVALL
+all<- ggplot(for_map, aes(long, lat, group = group,text = paste("state:", state, "<br>city:",city,"<br>county:",county)))+
+  geom_polygon(aes(fill = PCTPOVALL_2015), color = "black")+
+  scale_fill_viridis_c(option = "C")+
+  labs(title="Percent of all residents under the poverty level",subtitle = "In County", x="Longitude", y="Latitude") 
+
+#Choropleth map fo PCTPOV017
+sec<- ggplot(for_map, aes(long, lat, group = group,text = paste("state:", state, "<br>city:",city,"<br>county:",county)))+
+  geom_polygon(aes(fill = PCTPOV017_2015), color = "black")+
+  scale_fill_viridis_c(option = "C")+
+   labs(title="Percent of all residents residents aged 0 to 17 under the poverty level",subtitle = "In County", x="Longitude", y="Latitude") 
+
+#Choropleth map for MEDHHNIC
+med <- ggplot(for_map, aes(long, lat, group = group,text = paste("state:", state, "<br>city:",city,"<br>county:",county)))+
+  geom_polygon(aes(fill = MEDHHINC_2015), color = "black")+
+  scale_fill_viridis_c(option = "C")+
+   labs(title="Median household income",subtitle = "In County", x="Longitude", y="Latitude") 
+
+# ggplotly allows to hover in to see details of city, state and county
+ggplotly(all)
+ggplotly(sec)
+ggplotly(med)
+```
+The figure above shows the choropleth map showing the poverty of all resident, poverty of resident under 0-17 age and median household. The lighter shades shows lower percent of poverty and median income and viceversa. Plotting the county map was very vast, so I have shown details of county in each state to get the overall summary.
+
+**2. Plot of the number of incidents by month, according to individual and claimed**
+
+```{r}
+#summarized the count of total number of incident in month by individual and plot the bar graph, change the numeric month into month abbreviation
+midterm_data_shyaa23 %>%
+ mutate(m=month.abb[as.factor(month(midterm_data_shyaa23$dates))],individual=as.factor(individual)) %>%
+  group_by(m, individual) %>%
+  summarize(count =n()) %>%
+  ggplot(aes(x=m,y=count,fill=individual))+
+  geom_bar(stat = "identity",position=position_dodge()) +
+  theme_minimal()+
+  scale_x_discrete(limits = month.abb)+
+  labs(title="Number of incident by Month",subtitle = "By Individual", x="Month",y="No_incident")
+
+#summarized the count of total number of incident in month by claim and plot the bar graph, change the numeric month into month abbreviation
+midterm_data_shyaa23 %>%
+ mutate(m=month.abb[as.factor(month(midterm_data_shyaa23$dates))],claimed=as.factor(claimed)) %>%
+  group_by(m, claimed) %>%
+  summarize(n =n()) %>%
+  mutate(percent = (n / sum(n))*100) %>%
+  ggplot(aes(x=m,y=percent,fill=claimed))+
+  geom_bar(stat = "identity",position=position_dodge()) +
+  theme_minimal()+
+  scale_x_discrete(limits = month.abb)+
+  labs(title="Number of incident by Month",subtitle = "By Claimed", x="Month",
+       y="Percent_incident")
+```
+From the bar graph we can see that there is high number of incidents on July, August, September, November and December. In June and July, most of the incidents were carried out by an individual. Whereas, in Sep, Nov and Dec mostly incidents were carried out by several individuals not known to be affiliated with a group or organization. 
+
+In July, August, October and December for most of the incidents commited, no claim of responsibility was made. In Jan, Feb, Apr, May and Sep group or person claimed responsility for most of the attacks committed.
+
+**3. Relationships of population size and the three poverty variables to this combined count. Label the most interesting data point in one of the graphs with the group name (gname) that committed the incident.**
+
+```{r}
+#Select required variables only for this question and combine nkill and nwound
+ques3 <- midterm_data_shyaa23 %>%
+  select(gname,nkill,nwound,popul,PCTPOVALL_2015,PCTPOV017_2015,MEDHHINC_2015)%>%
+ mutate(ncombined = nkill+nwound)
+
+#Scatterplot for combined nkill and nwound and population
+ggplot(data=ques3)+
+geom_point(aes(x=popul,y=ncombined)) +
+theme_minimal()+
+  labs(title="Relation between ncombined and population size", x="Population ",
+       y="ncombined")
+
+#Scatterplot for combined nkill and nwound and PCTPOVALL_2015
+ggplot(data=ques3)+
+geom_point(aes(x=PCTPOVALL_2015,y=ncombined))+
+theme_minimal()+
+  labs(title="Relation between ncombined and all poverty", x="Poverty All ",
+       y="ncombined")
+
+#Scatterplot for combined nkill and nwound and PCTPOV017_2015
+ggplot(data=ques3)+
+geom_point(aes(x=PCTPOV017_2015,y=ncombined))+
+theme_minimal()+
+  labs(title="Relation between ncombined and poverty for 0-17years", x="Poverty for age 0-17",y="ncombined")
+
+#Scatterplot for combined nkill and nwound and MEDHHINC_2015
+ggplot(data=ques3)+
+geom_point(aes(x=MEDHHINC_2015,y=ncombined))+
+theme_minimal()+
+  labs(title="Relation between ncombined and median household", x="Median Household ",y="ncombined")
+```
+There is no such relationship between ncombined and population. Even though for varying population size, most of the number of people killed and wounded are approximately 0 to 30. 
+
+Looking at both the poverty for all and poverty for age 0-17 years, we can see that number of people killed and wounded are similar accross the percent of poverty percent.
+
+From the last graph, we can see that for most of the people withh lower to average median household income, there are more incidents present and the number of people killed and wounded are approximately 0 to 30. There is not much incident of nkill and nwounded for people having higher median household income.
+
+**4. Relationships of population size and the three poverty variables to attacktype1_txt.** 
+
+```{r}
+#Select required variables only for this question
+ques4<- midterm_data_shyaa23 %>%
+  select(attacktype1,attacktype1_txt,popul,PCTPOVALL_2015,PCTPOV017_2015,MEDHHINC_2015,property,individual) 
+
+#convert the attacktype_text to others if count is less than or equal to 3
+ques4 <-ques4 %>%
+  mutate(attacktype1_txt=as.factor(attacktype1_txt)) %>%
+  add_count(attacktype1_txt) %>%
+  mutate(attacktype1_txt = ifelse(n <=3 , "Other",as.character(attacktype1_txt)))
+
+#Boxplot showing relation for attack type and population size and coordinate flipped
+ggplot(data=ques4) +
+  geom_boxplot(aes(x=as.factor(attacktype1_txt), y=popul)) +
+  coord_flip()+
+theme_minimal()+
+  labs(title="Relation between attack_type and population size", x="attack_type",y="population")
+
+#Boxplot showing relation for attack type and all poverty and coordinate flipped
+ggplot(data=ques4) +
+  geom_boxplot(aes(x=as.factor(attacktype1_txt), y=PCTPOVALL_2015)) +
+  coord_flip()+
+theme_minimal()+
+  labs(title="Relation between attack_type and all poverty", x="attack_type",y="All poverty")
+
+#Boxplot showing relation for attack type and poverty for age 0-17 years and coordinate flipped
+ggplot(data=ques4) +
+  geom_boxplot(aes(x=as.factor(attacktype1_txt), y=PCTPOV017_2015)) +
+  coord_flip()+
+theme_minimal()+
+  labs(title="Relation between attack_type and poverty under 0-17 years", x="attack_type",y="Poverty for age 0-17")
+
+#Boxplot showing relation for attack type and median household income and coordinate flipped
+ggplot(data=ques4) +
+  geom_boxplot(aes(x=as.factor(attacktype1_txt), y=MEDHHINC_2015)) +
+  coord_flip()+
+theme_minimal()+
+  labs(title="Relation between attack_type and median Household income", x="attack_type",y="Median household income")
+
+  
+```
+The graph reveals that population size  affected by unarmed assualt is higher than rest type of attacks. There is much variability in unarmed assault and then after in armed assault compared to rest and both attacks are right skewed. The facility attack, bombing/explosion, armed assualt and other have roughly same center. There are some noticable outliers for facility attack, bombing/explosion and armed assualt.
+
+In the second and third graph, most of the attacks(facility attack, bombing/explosion and armed assualt) have higher variance.The facility attack, bombing/explosion, armed assualt and other have roughly same center. There are some noticable outliers for armed assualt.
+
+In the last graph, most of the attacks(facility attack, bombing/explosion and armed assualt) have higher variance.The facility attack, bombing/explosion, armed assualt and other have roughly same center. There are some noticable outliers for Facility attack, Bombin/Explosion and armed assualt.
+
+
+**5. Relationship between attacktype1_txt property and with individual**
+
+```{r}
+ques4 %>%
+ mutate(attacktype1_txt=as.factor(attacktype1_txt),individual=as.factor(individual)) %>%
+  group_by(attacktype1_txt, individual) %>%
+  summarize(n =n()) %>%
+  mutate(percent = (n / sum(n))*100) %>%
+  ggplot(aes(x=attacktype1_txt,y=percent,fill=individual))+
+  geom_bar(stat = "identity",position=position_dodge()) +
+  theme_minimal() +
+   theme(axis.text.x=element_text(angle=45, hjust=1))+
+  labs(title="Relationship between Attacktype and individual", x="Attack_type",
+       y="Percent")
+
+ques4 %>%
+ mutate(attacktype1_txt=as.factor(attacktype1_txt),property=as.factor(property)) %>%
+  group_by(attacktype1_txt, property) %>%
+  summarize(n=n()) %>%
+  mutate(percent = (n / sum(n))*100) %>%
+  ggplot(aes(x=attacktype1_txt,y=percent,fill=property))+
+  geom_bar(stat = "identity",position=position_dodge()) +
+  theme_minimal()+
+   theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  labs(title="Relationship between Attacktype and property", x="Attack_type",
+       y="Percent")
+
+```
+
+From the above graph we can see that for most of the attack type, the perpetrator were identified by name and not known to be affiliated with a group or organization. Approximately 85% of armed and unarmed assault were done by individual. About 80% of facility/infrastructure attack were not identified as unaffiliated individuals. Half percent of Bombing/ Explosion were done by individual and half were not identified as individual.
+
+From the second graph we can see that, attacks like armed assualt, unarmed assault and other did not result in property damage (60%, 85% and 65% respectively). About 65% of bombing/ Explosion and 90% of Facility infrastructure attack resulted in property damage. There are some incidents where it is not known whether property was damaged or not.
+
+
+
+
+
+
+
+
+
+
+
+
+
